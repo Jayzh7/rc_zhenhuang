@@ -1,0 +1,6 @@
+.env
+bin/
+coverage.out
+*.log
+*.exe
+AI Coding 作业.pdf

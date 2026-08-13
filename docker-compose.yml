@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: notifier
+      POSTGRES_USER: notifier
+      POSTGRES_PASSWORD: notifier
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifier -d notifier"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./internal/store/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./deploy/postgres/002_demo_destination.sql:/docker-entrypoint-initdb.d/002_demo_destination.sql:ro
+
+  receiver:
+    build: .
+    entrypoint: ["/app/demo-receiver"]
+    environment:
+      LISTEN_ADDR: ":8080"
+      DEMO_FAIL_FIRST: "1"
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgres://notifier:notifier@db:5432/notifier?sslmode=disable
+      LISTEN_ADDR: ":8080"
+      MAX_BODY_BYTES: "1048576"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  worker:
+    build: .
+    entrypoint: ["/app/worker"]
+    environment:
+      DATABASE_URL: postgres://notifier:notifier@db:5432/notifier?sslmode=disable
+      WORKER_CONCURRENCY: "2"
+      WORKER_POLL_INTERVAL: "250ms"
+      WORKER_LEASE_DURATION: "15s"
+      RETRY_BACKOFF_BASE: "1s"
+      RETRY_BACKOFF_MAX: "30s"
+      ALLOW_PRIVATE_DESTINATIONS: "true"
+      DEMO_AUTH_HEADER: "Bearer demo-secret"
+    depends_on:
+      db:
+        condition: service_healthy
+      receiver:
+        condition: service_started
+
+volumes:
+  postgres-data:

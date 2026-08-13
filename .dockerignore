@@ -1,0 +1,6 @@
+.git
+.env
+bin
+coverage.out
+*.log
+AI Coding 作业.pdf
