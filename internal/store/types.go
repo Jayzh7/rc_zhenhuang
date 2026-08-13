@@ -11,7 +11,6 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key conflicts with an existing request")
 	ErrNoJob               = errors.New("no delivery job available")
 	ErrLeaseLost           = errors.New("delivery lease lost")
-	ErrNotDead             = errors.New("notification is not in dead status")
 )
 
 type Submission struct {
@@ -76,12 +75,4 @@ type Completion struct {
 	HTTPStatus     *int
 	ErrorCode      string
 	ErrorMessage   string
-}
-
-type Stats struct {
-	PendingCount    int64 `json:"pendingCount"`
-	ProcessingCount int64 `json:"processingCount"`
-	SucceededCount  int64 `json:"succeededCount"`
-	DeadCount       int64 `json:"deadCount"`
-	TotalCount      int64 `json:"totalCount"`
 }

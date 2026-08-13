@@ -17,8 +17,6 @@ import (
 type fakeRepository struct {
 	submit func(context.Context, store.Submission) (store.Notification, bool, error)
 	get    func(context.Context, string, string) (store.Notification, error)
-	replay func(context.Context, string, string) (store.Notification, error)
-	stats  func(context.Context) (store.Stats, error)
 	ping   func(context.Context) error
 }
 
@@ -31,20 +29,6 @@ func (f fakeRepository) GetNotification(ctx context.Context, id, callerID string
 		return store.Notification{}, store.ErrNotFound
 	}
 	return f.get(ctx, id, callerID)
-}
-
-func (f fakeRepository) ReplayNotification(ctx context.Context, id, callerID string) (store.Notification, error) {
-	if f.replay == nil {
-		return store.Notification{}, store.ErrNotFound
-	}
-	return f.replay(ctx, id, callerID)
-}
-
-func (f fakeRepository) GetStats(ctx context.Context) (store.Stats, error) {
-	if f.stats == nil {
-		return store.Stats{}, nil
-	}
-	return f.stats(ctx)
 }
 
 func (f fakeRepository) Ping(ctx context.Context) error {
@@ -183,59 +167,6 @@ func TestReadyReportsDatabaseFailure(t *testing.T) {
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d", response.Code)
-	}
-}
-
-func TestReplayRequeuesDeadNotification(t *testing.T) {
-	t.Parallel()
-
-	repository := fakeRepository{
-		replay: func(_ context.Context, id, callerID string) (store.Notification, error) {
-			if id != "notif-dead-1" || callerID != "orders" {
-				t.Fatalf("unexpected params: id=%s, callerID=%s", id, callerID)
-			}
-			return store.Notification{
-				ID:     "notif-dead-1",
-				Status: "pending",
-			}, nil
-		},
-	}
-
-	request := httptest.NewRequest(http.MethodPost, "/v1/notifications/notif-dead-1/replay", nil)
-	request.Header.Set("X-Caller-ID", "orders")
-	response := httptest.NewRecorder()
-
-	newTestHandler(repository, 1024).Routes().ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	var notif store.Notification
-	if err := json.NewDecoder(response.Body).Decode(&notif); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if notif.Status != "pending" {
-		t.Fatalf("status = %s", notif.Status)
-	}
-}
-
-func TestReplayRejectsNonDeadNotification(t *testing.T) {
-	t.Parallel()
-
-	repository := fakeRepository{
-		replay: func(context.Context, string, string) (store.Notification, error) {
-			return store.Notification{}, store.ErrNotDead
-		},
-	}
-
-	request := httptest.NewRequest(http.MethodPost, "/v1/notifications/notif-live/replay", nil)
-	request.Header.Set("X-Caller-ID", "orders")
-	response := httptest.NewRecorder()
-
-	newTestHandler(repository, 1024).Routes().ServeHTTP(response, request)
-
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

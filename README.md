@@ -370,8 +370,6 @@ WHERE id = '<notification-id>'
 |---|---|---|
 | `POST` | `/v1/destinations/{destinationId}/notifications` | 创建或幂等读取通知 |
 | `GET` | `/v1/notifications/{notificationId}` | 查询属于当前调用方的通知 |
-| `POST` | `/v1/notifications/{notificationId}/replay` | 将状态为 `dead` 的通知重新放回队列重试 |
-| `GET` | `/v1/stats` | 查询系统各状态通知数量指标 |
 | `GET` | `/health/live` | 进程存活 |
 | `GET` | `/health/ready` | 数据库可用 |
 

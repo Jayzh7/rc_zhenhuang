@@ -49,7 +49,6 @@ type Client struct {
 	httpClient               *http.Client
 	secrets                  SecretProvider
 	allowPrivateDestinations bool
-	circuitBreaker           *CircuitBreaker
 }
 
 func NewClient(allowPrivateDestinations bool, secrets SecretProvider) *Client {
@@ -76,7 +75,6 @@ func NewClient(allowPrivateDestinations bool, secrets SecretProvider) *Client {
 		},
 		secrets:                  secrets,
 		allowPrivateDestinations: allowPrivateDestinations,
-		circuitBreaker:           NewCircuitBreaker(5, 30*time.Second),
 	}
 }
 
@@ -85,25 +83,6 @@ func (c *Client) CloseIdleConnections() {
 }
 
 func (c *Client) Deliver(ctx context.Context, job *store.DeliveryJob) Result {
-	if c.circuitBreaker != nil {
-		allowed, remaining := c.circuitBreaker.Allow(job.DestinationID)
-		if !allowed {
-			return retryable("circuit_breaker_open", "destination circuit breaker is open due to consecutive failures", remaining)
-		}
-	}
-
-	result := c.deliverRequest(ctx, job)
-	if c.circuitBreaker != nil {
-		if result.Success {
-			c.circuitBreaker.RecordSuccess(job.DestinationID)
-		} else if result.Retryable && result.ErrorCode != "request_canceled" {
-			c.circuitBreaker.RecordFailure(job.DestinationID)
-		}
-	}
-	return result
-}
-
-func (c *Client) deliverRequest(ctx context.Context, job *store.DeliveryJob) Result {
 	if err := validateEndpoint(job.TargetURL, c.allowPrivateDestinations); err != nil {
 		return permanent("invalid_destination", err.Error())
 	}

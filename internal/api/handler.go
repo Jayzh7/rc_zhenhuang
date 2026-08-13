@@ -21,8 +21,6 @@ var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`
 type Repository interface {
 	Submit(context.Context, store.Submission) (store.Notification, bool, error)
 	GetNotification(context.Context, string, string) (store.Notification, error)
-	ReplayNotification(context.Context, string, string) (store.Notification, error)
-	GetStats(context.Context) (store.Stats, error)
 	Ping(context.Context) error
 }
 
@@ -46,8 +44,6 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /health/ready", h.ready)
 	mux.HandleFunc("POST /v1/destinations/{destinationID}/notifications", h.submit)
 	mux.HandleFunc("GET /v1/notifications/{notificationID}", h.get)
-	mux.HandleFunc("POST /v1/notifications/{notificationID}/replay", h.replay)
-	mux.HandleFunc("GET /v1/stats", h.stats)
 	return mux
 }
 
@@ -177,53 +173,6 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, notification)
 	}
-}
-
-func (h *Handler) replay(w http.ResponseWriter, r *http.Request) {
-	callerID, ok := callerID(w, r)
-	if !ok {
-		return
-	}
-
-	notificationID := r.PathValue("notificationID")
-	if len(notificationID) < 1 || len(notificationID) > 128 || containsControl(notificationID) {
-		writeError(w, http.StatusBadRequest, "invalid_notification_id", "notification identifier is invalid")
-		return
-	}
-
-	notification, err := h.repository.ReplayNotification(r.Context(), notificationID, callerID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "notification_not_found", "notification was not found")
-	case errors.Is(err, store.ErrNotDead):
-		writeError(w, http.StatusBadRequest, "notification_not_dead", "only notifications in dead status can be replayed")
-	case err != nil:
-		h.logger.Error("replay notification",
-			"caller_id", callerID,
-			"notification_id", notificationID,
-			"error", err,
-		)
-		writeError(w, http.StatusInternalServerError, "internal_error", "notification could not be replayed")
-	default:
-		h.logger.Info("replayed dead notification",
-			"caller_id", callerID,
-			"notification_id", notificationID,
-		)
-		writeJSON(w, http.StatusOK, notification)
-	}
-}
-
-func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-
-	stats, err := h.repository.GetStats(ctx)
-	if err != nil {
-		h.logger.Error("get notification stats", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "stats could not be loaded")
-		return
-	}
-	writeJSON(w, http.StatusOK, stats)
 }
 
 func callerID(w http.ResponseWriter, r *http.Request) (string, bool) {
