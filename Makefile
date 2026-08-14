@@ -9,7 +9,7 @@ test:
 	go test -v ./...
 
 test-integration:
-	go test -v ./internal/store -run TestStoreLifecycle
+	go test -v ./internal/store -run TestStoreLifecycle -args -require-integration-database
 
 run: build
 	./bin/api

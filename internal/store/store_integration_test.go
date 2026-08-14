@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"flag"
 	"os"
 	"testing"
 	"time"
@@ -10,9 +11,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var requireIntegrationDatabase = flag.Bool(
+	"require-integration-database",
+	false,
+	"fail instead of skipping when TEST_DATABASE_URL is not set",
+)
+
 func TestStoreLifecycle(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
+		if *requireIntegrationDatabase {
+			t.Fatal("TEST_DATABASE_URL is required")
+		}
 		t.Skip("TEST_DATABASE_URL is not set")
 	}
 
