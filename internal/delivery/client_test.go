@@ -2,7 +2,9 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +19,14 @@ type staticSecrets map[string]string
 
 func (s staticSecrets) Get(_ context.Context, name string) (string, error) {
 	return s[name], nil
+}
+
+type failingSecrets struct {
+	err error
+}
+
+func (s failingSecrets) Get(context.Context, string) (string, error) {
+	return "", s.err
 }
 
 func TestClientDeliversOpaqueRequest(t *testing.T) {
@@ -77,6 +87,8 @@ func TestClientClassifiesResponses(t *testing.T) {
 		retryable bool
 	}{
 		{name: "bad request", status: http.StatusBadRequest, retryable: false},
+		{name: "request timeout", status: http.StatusRequestTimeout, retryable: true},
+		{name: "too early", status: http.StatusTooEarly, retryable: true},
 		{name: "too many requests", status: http.StatusTooManyRequests, retryable: true},
 		{name: "server error", status: http.StatusServiceUnavailable, retryable: true},
 	}
@@ -111,6 +123,71 @@ func TestClientClassifiesResponses(t *testing.T) {
 	}
 }
 
+func TestClientClassifiesTimeoutAndNetworkFailureAsRetryable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("timeout", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(200 * time.Millisecond)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+
+		client := NewClient(true, staticSecrets{})
+		defer client.CloseIdleConnections()
+		job := baseJob(server.URL)
+		job.Timeout = 50 * time.Millisecond
+
+		result := client.Deliver(context.Background(), job)
+		if !result.Retryable || result.ErrorCode != "timeout" {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+
+	t.Run("network failure", func(t *testing.T) {
+		t.Parallel()
+
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		address := listener.Addr().String()
+		if err := listener.Close(); err != nil {
+			t.Fatalf("close listener: %v", err)
+		}
+
+		client := NewClient(true, staticSecrets{})
+		defer client.CloseIdleConnections()
+		result := client.Deliver(context.Background(), baseJob("http://"+address))
+
+		if !result.Retryable || result.ErrorCode != "network_error" {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+}
+
+func TestClientClassifiesCanceledRequest(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := NewClient(true, staticSecrets{})
+	defer client.CloseIdleConnections()
+	result := client.Deliver(ctx, baseJob(server.URL))
+
+	if !result.Retryable || result.ErrorCode != "request_canceled" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestClientDoesNotFollowRedirects(t *testing.T) {
 	t.Parallel()
 
@@ -135,6 +212,18 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	}
 	if targetCalls.Load() != 0 {
 		t.Fatalf("redirect target calls = %d", targetCalls.Load())
+	}
+}
+
+func TestClientRejectsHostnameResolvingToPrivateAddress(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(false, staticSecrets{})
+	defer client.CloseIdleConnections()
+	result := client.Deliver(context.Background(), baseJob("http://localhost:8080/webhook"))
+
+	if result.Success || result.Retryable || result.ErrorCode != "invalid_destination" {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
@@ -184,6 +273,75 @@ func TestClientRejectsStaticAndSecretHeaderCollision(t *testing.T) {
 	result := client.Deliver(context.Background(), job)
 	if result.ErrorCode != "invalid_secret_header" || result.Retryable {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestClientRejectsInvalidDestinationConfiguration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*store.DeliveryJob)
+		client    *Client
+		errorCode string
+	}{
+		{
+			name: "nonpositive timeout",
+			configure: func(job *store.DeliveryJob) {
+				job.Timeout = 0
+			},
+			client:    NewClient(true, staticSecrets{}),
+			errorCode: "invalid_timeout",
+		},
+		{
+			name: "incomplete secret configuration",
+			configure: func(job *store.DeliveryJob) {
+				header := "Authorization"
+				job.SecretHeaderName = &header
+			},
+			client:    NewClient(true, staticSecrets{}),
+			errorCode: "invalid_secret_configuration",
+		},
+		{
+			name: "missing secret provider",
+			configure: func(job *store.DeliveryJob) {
+				header := "Authorization"
+				key := "AUTH_TOKEN"
+				job.SecretHeaderName = &header
+				job.SecretEnvKey = &key
+			},
+			client:    NewClient(true, nil),
+			errorCode: "missing_secret_provider",
+		},
+		{
+			name: "secret lookup failure",
+			configure: func(job *store.DeliveryJob) {
+				header := "Authorization"
+				key := "AUTH_TOKEN"
+				job.SecretHeaderName = &header
+				job.SecretEnvKey = &key
+			},
+			client: NewClient(true, failingSecrets{
+				err: errors.New("secret store unavailable"),
+			}),
+			errorCode: "missing_secret",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			defer test.client.CloseIdleConnections()
+
+			job := baseJob("http://127.0.0.1:1/webhook")
+			test.configure(job)
+			result := test.client.Deliver(context.Background(), job)
+
+			if result.Success || result.Retryable || result.ErrorCode != test.errorCode {
+				t.Fatalf("result = %+v", result)
+			}
+		})
 	}
 }
 

@@ -1,0 +1,55 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go and PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: notifier_test
+          POSTGRES_USER: notifier
+          POSTGRES_PASSWORD: notifier
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U notifier -d notifier_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://notifier:notifier@127.0.0.1:5432/notifier_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+      - name: Vet
+        run: go vet ./...
+
+  compose:
+    name: Docker Compose MVP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run Compose capability test
+        env:
+          RUN_COMPOSE_E2E: "1"
+        run: go test -count=1 -v ./e2e -run TestComposeMVP

@@ -417,20 +417,27 @@ go vet ./...
 Store 集成测试需要一个专用 PostgreSQL 数据库：
 
 ```bash
-TEST_DATABASE_URL=postgres://notifier:notifier@localhost:5432/notifier_test?sslmode=disable go test ./internal/store -run TestStoreLifecycle
+TEST_DATABASE_URL=postgres://notifier:notifier@localhost:5432/notifier_test?sslmode=disable go test -count=1 -v ./internal/store -args -require-integration-database
 ```
 
-该测试会清空所连接数据库中的本项目三张业务表，只能指向专用测试库。
+集成测试会创建独立 schema，并在结束时清理。
+
+完整 Docker Compose 能力测试：
+
+```bash
+RUN_COMPOSE_E2E=1 go test -count=1 -v ./e2e -run TestComposeMVP
+```
 
 覆盖重点：
 
-- API 持久化接收、Body 限制、幂等冲突；
-- HTTP Body/Header/Secret 组装；
-- `2xx`、`4xx`、`429`、`5xx` 分类；
-- Redirect 和私网字面地址阻断；
+- API 接收、参数限制、状态码和调用方隔离；
+- Body/Header/Secret 组装、HTTP 失败分类、超时、Redirect 和 SSRF 阻断；
 - 指数退避上限和 `Retry-After`；
-- Worker 重试与最终死信选择；
-- 可选数据库生命周期集成测试。
+- Worker 成功、重试、最终死信和优雅停机；
+- PostgreSQL 迁移幂等、并发提交去重、目标快照、并发领取、租约恢复、旧 Worker 隔离和 attempt 审计；
+- Docker 容器构建、`503 -> retry -> 204`、HTTP 幂等、`409` 和 Worker 停机期间持久排队。
+
+GitHub Actions 会在每次 push 和 pull request 中运行真实 PostgreSQL 测试、race detector、`go vet` 和 Docker Compose 能力测试。
 
 ## 目录
 
